@@ -1,0 +1,8 @@
+import { ensureSeeded, movieById } from './db.js';
+const root = document.querySelector('#root');
+const escape = v => String(v ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
+const id = new URLSearchParams(location.search).get('id');
+await ensureSeeded();
+const movie = await movieById(id);
+if (!movie) root.innerHTML = '<header><a class="brand" href="index.html"><span>▶</span> MovieZone</a></header><main class="admin-wrap"><section class="empty"><h1>Movie not found</h1><p>This title may have been removed from this browser.</p><a class="download" href="index.html">Return to catalogue</a></section></main>';
+else { const poster = movie.posterBlob ? URL.createObjectURL(movie.posterBlob) : movie.poster || '/public/posters/default.svg'; document.title = `${movie.title} — MovieZone`; root.innerHTML = `<header><a class="brand" href="index.html"><span>▶</span> MovieZone</a><a class="admin-link" href="index.html">Back to catalogue</a></header><main class="detail-page"><a class="back-link" href="index.html">← All movies</a><article class="detail-grid"><img src="${poster}" alt="${escape(movie.title)} poster"><div><p class="eyebrow">${escape(movie.category)} · ${movie.year}</p><h1>${escape(movie.title)}</h1><p class="detail-lang">${escape(movie.language)}</p><p class="detail-copy">${escape(movie.description)}</p>${movie.downloadUrl ? `<a class="download" target="_blank" rel="noopener noreferrer" href="${escape(movie.downloadUrl)}">Authorized download ↗</a>` : '<p class="unavailable">No authorized download is listed for this title.</p>'}</div></article></main>`; }

@@ -1,29 +1,31 @@
 # MovieZone
 
-MovieZone is a responsive, local-first movie catalogue for information and **legally authorized** download links. It includes a public discovery site, a cookie-protected administrator dashboard, SQLite persistence, sample fictional titles, poster URL/upload support, searching, and filters. It intentionally does not include video playback or streaming.
+MovieZone is a responsive, local-first movie information website. It uses native ES modules/Web Components-style rendering and **IndexedDB**—no server database, streaming player, or fake authentication is included.
 
-## Run locally
+## Run it locally
 
-**Requirements:** Node.js 22.5+ (Node 24+ recommended because this project uses the built-in `node:sqlite` module). No external database server and no `npm install` are required.
+**Requirement:** Node.js 18 or newer.
 
 ```bash
-cd MovieZone
-cp .env.example .env # optional but strongly recommended
-# Edit .env to set a unique ADMIN_USERNAME and ADMIN_PASSWORD
-npm start
+npm run build
+npm run dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000). The SQLite database is created automatically at `data/moviezone.db`; it preserves movie data across refreshes and restarts. Uploaded poster files are stored under `uploads/`.
+Then open [http://localhost:3000](http://localhost:3000). The included static server exposes the public catalogue at `/` and the separate local dashboard at `/admin.html`.
 
-## Admin dashboard
+## What works
 
-Open [http://localhost:3000/admin.html](http://localhost:3000/admin.html). With no environment settings, the local development credentials are:
+- Browse the seeded catalogue on phones, tablets, and desktop widths.
+- Search titles, descriptions, languages, and categories; filter by category, language, and release year.
+- Open a separate details page for every title.
+- Open an **Authorized download** link only when the title has one. MovieZone does not include a video player.
+- Add, edit, and delete titles from `/admin.html`.
+- Use either a poster image URL or upload PNG, JPG, WEBP, or GIF posters up to 5 MB.
 
-- Username: `admin`
-- Password: `moviezone-admin`
+## Data and privacy
 
-For any shared or hosted deployment, create `.env` from `.env.example` and set a strong unique password before starting the server. From the dashboard you can add, edit, and delete titles, set category/language/year/descriptions, paste poster/download URLs, or upload an image poster (PNG, JPG, WEBP, or GIF, up to 5 MB).
+Movies and uploaded poster blobs are stored in the current browser's IndexedDB. They persist through refreshes and local server restarts, but are available **only in this browser profile on this device**. They are not shared with another person or device because MovieZone has no online backend.
 
-## Hosting notes
+The dashboard is deliberately labelled as a local browser dashboard. It has no login, and it must not be represented as secure administration or used for multi-user publishing.
 
-Set `PORT`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD` as environment variables on the host. Persist the `data/` and `uploads/` directories using the host's persistent volume mechanism. Use HTTPS and place the app behind a production reverse proxy before making it public.
+Only add download URLs for content that you are legally authorized to distribute or link to.
