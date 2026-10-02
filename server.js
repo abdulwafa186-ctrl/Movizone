@@ -1,10 +1,25 @@
 const http = require('http'), fs = require('fs'), path = require('path'), crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
-const ROOT = __dirname, PUBLIC = path.join(ROOT, 'public'), UPLOADS = path.join(ROOT, 'uploads');
-const db = new DatabaseSync(path.join(ROOT, 'data', 'moviezone.db'));
+const ROOT = __dirname, PUBLIC = path.join(ROOT, 'public'), UPLOADS = path.join(ROOT, 'uploads'), DATA = path.join(ROOT, 'data');
+
+function loadEnv(file) {
+ if (!fs.existsSync(file)) return;
+ for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+  const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+  if (!match || Object.prototype.hasOwnProperty.call(process.env, match[1])) continue;
+  let value = match[2];
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+  else value = value.replace(/\s+#.*$/, '');
+  process.env[match[1]] = value;
+ }
+}
+loadEnv(path.join(ROOT, '.env'));
+fs.mkdirSync(DATA, { recursive: true });
+fs.mkdirSync(UPLOADS, { recursive: true });
+const db = new DatabaseSync(path.join(DATA, 'moviezone.db'));
 db.exec(`CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT NOT NULL, year INTEGER NOT NULL, language TEXT NOT NULL, category TEXT NOT NULL, poster TEXT, download_url TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
 const adminUser = process.env.ADMIN_USERNAME || 'admin', adminPass = process.env.ADMIN_PASSWORD || 'moviezone-admin';
-const sessions = new Map();
+const sessions = new Map(), JSON_BODY_LIMIT = 100 * 1024;
 const samples = [
  ['The Last Horizon','A resourceful cartographer races across a shifting desert world to find the city her mother mapped decades ago.',2026,'English','Hollywood','/posters/horizon.svg','https://archive.org/'],
  ['Monsoon Letters','Two strangers exchange anonymous letters during one unforgettable Mumbai monsoon.',2025,'Hindi','Bollywood','/posters/monsoon.svg','https://archive.org/'],
@@ -15,24 +30,33 @@ const samples = [
 ];
 if (!db.prepare('SELECT COUNT(*) n FROM movies').get().n) { const add=db.prepare('INSERT INTO movies(title,description,year,language,category,poster,download_url) VALUES(?,?,?,?,?,?,?)'); for(const m of samples)add.run(...m); }
 function send(res, code, data, type='application/json'){res.writeHead(code, {'Content-Type':type, 'Cache-Control':'no-store'});res.end(type==='application/json'?JSON.stringify(data):data)}
-function cookies(req){return Object.fromEntries((req.headers.cookie||'').split(';').filter(Boolean).map(x=>x.trim().split('=').map(decodeURIComponent)))}
+function cookies(req) {
+ const result = {};
+ for (const part of (req.headers.cookie || '').split(';')) {
+  const index = part.indexOf('='); if (index < 0) continue;
+  try { result[decodeURIComponent(part.slice(0, index).trim())] = decodeURIComponent(part.slice(index + 1).trim()); } catch { /* Ignore malformed cookie pairs. */ }
+ }
+ return result;
+}
 function auth(req){return sessions.has(cookies(req).mz_session)}
 function multipart(req){return new Promise(resolve=>{let a=[];req.on('data',d=>a.push(d));req.on('end',()=>{let raw=Buffer.concat(a), b=(req.headers['content-type']||'').match(/boundary=(.+)$/);if(!b)return resolve(null);let parts=raw.toString('binary').split('--'+b[1]);for(let x of parts){let h=x.indexOf('\r\n\r\n');if(h<0)continue;let head=x.slice(0,h), name=(head.match(/name=\"([^\"]+)/)||[])[1], fn=(head.match(/filename=\"([^\"]*)/)||[])[1];if(name==='poster'&&fn){let data=Buffer.from(x.slice(h+4).replace(/\r\n$/, ''),'binary'), ext=path.extname(fn).toLowerCase();if(!['.png','.jpg','.jpeg','.webp','.gif'].includes(ext)||data.length>5*1024*1024)return resolve({error:'Upload a PNG, JPG, WEBP, or GIF below 5 MB.'});let file=crypto.randomUUID()+ext;fs.writeFileSync(path.join(UPLOADS,file),data);return resolve({url:'/uploads/'+file})}}resolve({error:'Choose an image to upload.'})})})}
-function body(req){return new Promise((resolve,reject)=>{let s='';req.on('data',d=>s+=d);req.on('end',()=>{try{resolve(s?JSON.parse(s):{})}catch{reject(Error('Invalid JSON'))}})})}
+function requestTooLarge() { const error = Error('Request body is too large.'); error.code = 'BODY_TOO_LARGE'; return error; }
+function body(req){return new Promise((resolve,reject)=>{let chunks=[], size=0, finished=false; const length=Number(req.headers['content-length']); if (Number.isFinite(length) && length > JSON_BODY_LIMIT) { req.resume(); return reject(requestTooLarge()); } req.on('data',d=>{if(finished)return;size+=d.length;if(size>JSON_BODY_LIMIT){finished=true;chunks=[];req.pause();return reject(requestTooLarge())}chunks.push(d)});req.on('error',reject);req.on('end',()=>{if(finished)return;try{resolve(size?JSON.parse(Buffer.concat(chunks).toString('utf8')):{})}catch{reject(Error('Invalid JSON'))}})})}
 function movie(row){return {...row, poster:row.poster||'/posters/default.svg'} }
+function bodyError(res, error, fallback) { return send(res, error.code === 'BODY_TOO_LARGE' ? 413 : 400, { error: error.code === 'BODY_TOO_LARGE' ? error.message : fallback }); }
 function api(req,res,u){
  const method=req.method, p=u.pathname;
  if(method==='GET'&&p==='/api/movies'){let q=u.searchParams.get('q')||'',category=u.searchParams.get('category')||'',language=u.searchParams.get('language')||'',year=u.searchParams.get('year')||'';let where=[],a=[];if(q){where.push('(title LIKE ? OR description LIKE ?)');a.push('%'+q+'%','%'+q+'%')}if(category){where.push('category=?');a.push(category)}if(language){where.push('language=?');a.push(language)}if(year){where.push('year=?');a.push(year)}let sql='SELECT * FROM movies '+(where.length?'WHERE '+where.join(' AND '):'')+' ORDER BY datetime(created_at) DESC,id DESC';return send(res,200,db.prepare(sql).all(...a).map(movie))}
  if(method==='GET'&&/^\/api\/movies\/\d+$/.test(p)){let m=db.prepare('SELECT * FROM movies WHERE id=?').get(+p.split('/').pop());return m?send(res,200,movie(m)):send(res,404,{error:'Movie not found'})}
  if(method==='GET'&&p==='/api/meta'){return send(res,200,{categories:['Bollywood','Hollywood','South Indian','Web Series'],languages:db.prepare('SELECT DISTINCT language FROM movies ORDER BY language').all().map(x=>x.language),years:db.prepare('SELECT DISTINCT year FROM movies ORDER BY year DESC').all().map(x=>x.year)})}
  if(method==='POST'&&p==='/api/admin/upload'){if(!auth(req))return send(res,401,{error:'Please sign in as an administrator.'});return multipart(req).then(x=>x.error?send(res,400,x):send(res,201,x))}
- if(method==='POST'&&p==='/api/login')return body(req).then(x=>{if(x.username===adminUser&&x.password===adminPass){let t=crypto.randomBytes(32).toString('hex');sessions.set(t,Date.now());res.writeHead(200,{'Set-Cookie':`mz_session=${t}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`,'Content-Type':'application/json'});return res.end(JSON.stringify({ok:true}))}send(res,401,{error:'Incorrect username or password'})}).catch(()=>send(res,400,{error:'Invalid request'}));
+ if(method==='POST'&&p==='/api/login')return body(req).then(x=>{if(x.username===adminUser&&x.password===adminPass){let t=crypto.randomBytes(32).toString('hex');sessions.set(t,Date.now());res.writeHead(200,{'Set-Cookie':`mz_session=${t}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`,'Content-Type':'application/json'});return res.end(JSON.stringify({ok:true}))}send(res,401,{error:'Incorrect username or password'})}).catch(error=>bodyError(res,error,'Invalid request'));
  if(method==='POST'&&p==='/api/logout'){let t=cookies(req).mz_session;sessions.delete(t);res.writeHead(200,{'Set-Cookie':'mz_session=; HttpOnly; Path=/; Max-Age=0','Content-Type':'application/json'});return res.end('{"ok":true}')}
  if(method==='GET'&&p==='/api/admin/status')return send(res,200,{authenticated:auth(req)});
  if(!auth(req)&&p.startsWith('/api/admin'))return send(res,401,{error:'Please sign in as an administrator.'});
  if(method==='GET'&&p==='/api/admin/dashboard'){let total=db.prepare('SELECT COUNT(*) n FROM movies').get().n,recent=db.prepare('SELECT * FROM movies ORDER BY datetime(created_at) DESC,id DESC LIMIT 5').all().map(movie);return send(res,200,{total,recent})}
- if(method==='POST'&&p==='/api/admin/movies')return body(req).then(x=>{let r=db.prepare('INSERT INTO movies(title,description,year,language,category,poster,download_url) VALUES(?,?,?,?,?,?,?)').run(x.title,x.description,+x.year,x.language,x.category,x.poster||'/posters/default.svg',x.download_url||'');send(res,201,{id:r.lastInsertRowid})}).catch(()=>send(res,400,{error:'Complete all required fields.'}));
- if(method==='PUT'&&/^\/api\/admin\/movies\/\d+$/.test(p))return body(req).then(x=>{db.prepare('UPDATE movies SET title=?,description=?,year=?,language=?,category=?,poster=?,download_url=? WHERE id=?').run(x.title,x.description,+x.year,x.language,x.category,x.poster||'/posters/default.svg',x.download_url||'',+p.split('/').pop());send(res,200,{ok:true})}).catch(()=>send(res,400,{error:'Unable to update movie.'}));
+ if(method==='POST'&&p==='/api/admin/movies')return body(req).then(x=>{let r=db.prepare('INSERT INTO movies(title,description,year,language,category,poster,download_url) VALUES(?,?,?,?,?,?,?)').run(x.title,x.description,+x.year,x.language,x.category,x.poster||'/posters/default.svg',x.download_url||'');send(res,201,{id:r.lastInsertRowid})}).catch(error=>bodyError(res,error,'Complete all required fields.'));
+ if(method==='PUT'&&/^\/api\/admin\/movies\/\d+$/.test(p))return body(req).then(x=>{db.prepare('UPDATE movies SET title=?,description=?,year=?,language=?,category=?,poster=?,download_url=? WHERE id=?').run(x.title,x.description,+x.year,x.language,x.category,x.poster||'/posters/default.svg',x.download_url||'',+p.split('/').pop());send(res,200,{ok:true})}).catch(error=>bodyError(res,error,'Unable to update movie.'));
  if(method==='DELETE'&&/^\/api\/admin\/movies\/\d+$/.test(p)){db.prepare('DELETE FROM movies WHERE id=?').run(+p.split('/').pop());return send(res,200,{ok:true})}
  send(res,404,{error:'Not found'});
 }

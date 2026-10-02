@@ -1,7 +1,49 @@
-const $=s=>document.querySelector(s), cards=$('#cards'), dialog=$('#details'); let meta;
-async function get(url){let r=await fetch(url);return r.json()}
-function card(m){return `<article class="card" data-id="${m.id}"><img src="${m.poster}" alt="${m.title} poster"><div class="card-body"><p>${m.category} · ${m.year}</p><h3>${m.title}</h3><span>${m.language}</span></div><button aria-label="View ${m.title}">View details →</button></article>`}
-async function load(){let p=new URLSearchParams();let q=$('#search').value.trim();if(q)p.set('q',q);['category','language','year'].forEach(x=>{if($('#'+x).value)p.set(x,$('#'+x).value)});let movies=await get('/api/movies?'+p);cards.innerHTML=movies.length?movies.map(card).join(''):`<div class="empty"><h3>No titles found</h3><p>Try changing your search or filters.</p></div>`}
-async function details(id){let m=await get('/api/movies/'+id);$('#detailContent').innerHTML=`<img src="${m.poster}" alt="${m.title} poster"><div><p class="eyebrow">${m.category} · ${m.year}</p><h2>${m.title}</h2><p class="detail-lang">${m.language}</p><p>${m.description}</p>${m.download_url?`<a class="download" target="_blank" rel="noopener" href="${m.download_url}">Authorized download ↗</a>`:'<p class="unavailable">No authorized download is currently listed.</p>'}</div>`;dialog.showModal()}
-(async()=>{meta=await get('/api/meta');for(let key of ['category','language','year']){let vals=key==='category'?meta.categories:key==='language'?meta.languages:meta.years;$('#'+key).innerHTML+=vals.map(v=>`<option>${v}</option>`).join('')}load()})();
-$('#searchBtn').onclick=load;$('#search').onkeydown=e=>e.key==='Enter'&&load();document.querySelectorAll('.categories button').forEach(b=>b.onclick=()=>{$('#category').value=b.dataset.cat;load();$('#movies').scrollIntoView({behavior:'smooth'})});['category','language','year'].forEach(x=>$('#'+x).onchange=load);$('#clear').onclick=()=>{['category','language','year'].forEach(x=>$('#'+x).value='');$('#search').value='';load()};cards.onclick=e=>{let c=e.target.closest('.card');if(c)details(c.dataset.id)};$('.filter-toggle').onclick=()=>{$('.filters').hidden=!$('.filters').hidden};$('.close').onclick=()=>dialog.close();$('.menu').onclick=()=>document.querySelector('nav').classList.toggle('open');
+const $ = s => document.querySelector(s), cards = $('#cards'), dialog = $('#details');
+let meta;
+
+async function get(url) { const response = await fetch(url); return response.json(); }
+function safeUrl(value, fallback = '') {
+ try { const url = new URL(value, window.location.origin); return ['http:', 'https:'].includes(url.protocol) ? url.href : fallback; } catch { return fallback; }
+}
+function image(src, alt) { const element = document.createElement('img'); element.src = safeUrl(src, '/posters/default.svg'); element.alt = `${alt} poster`; return element; }
+function card(movie) {
+ const article = document.createElement('article'); article.className = 'card'; article.dataset.id = movie.id;
+ article.append(image(movie.poster, movie.title));
+ const body = document.createElement('div'); body.className = 'card-body';
+ const info = document.createElement('p'); info.textContent = `${movie.category} · ${movie.year}`;
+ const title = document.createElement('h3'); title.textContent = movie.title;
+ const language = document.createElement('span'); language.textContent = movie.language;
+ body.append(info, title, language);
+ const button = document.createElement('button'); button.setAttribute('aria-label', `View ${movie.title}`); button.textContent = 'View details →';
+ article.append(body, button); return article;
+}
+function emptyState() {
+ const empty = document.createElement('div'); empty.className = 'empty';
+ const title = document.createElement('h3'); title.textContent = 'No titles found';
+ const text = document.createElement('p'); text.textContent = 'Try changing your search or filters.';
+ empty.append(title, text); return empty;
+}
+async function load() {
+ const params = new URLSearchParams(), query = $('#search').value.trim(); if (query) params.set('q', query);
+ ['category', 'language', 'year'].forEach(key => { if ($('#' + key).value) params.set(key, $('#' + key).value); });
+ const movies = await get('/api/movies?' + params); cards.replaceChildren(...(movies.length ? movies.map(card) : [emptyState()]));
+}
+async function details(id) {
+ const movie = await get('/api/movies/' + id), content = $('#detailContent'); content.replaceChildren(image(movie.poster, movie.title));
+ const details = document.createElement('div'), eyebrow = document.createElement('p'), title = document.createElement('h2'), language = document.createElement('p'), description = document.createElement('p');
+ eyebrow.className = 'eyebrow'; eyebrow.textContent = `${movie.category} · ${movie.year}`;
+ title.textContent = movie.title; language.className = 'detail-lang'; language.textContent = movie.language; description.textContent = movie.description;
+ details.append(eyebrow, title, language, description);
+ const downloadUrl = safeUrl(movie.download_url);
+ if (downloadUrl) { const link = document.createElement('a'); link.className = 'download'; link.target = '_blank'; link.rel = 'noopener'; link.href = downloadUrl; link.textContent = 'Authorized download ↗'; details.append(link); }
+ else { const unavailable = document.createElement('p'); unavailable.className = 'unavailable'; unavailable.textContent = 'No authorized download is currently listed.'; details.append(unavailable); }
+ content.append(details); dialog.showModal();
+}
+function addOptions(key, values) { const select = $('#' + key); for (const value of values) { const option = document.createElement('option'); option.value = value; option.textContent = value; select.append(option); } }
+(async () => { meta = await get('/api/meta'); addOptions('category', meta.categories); addOptions('language', meta.languages); addOptions('year', meta.years); load(); })();
+$('#searchBtn').onclick = load; $('#search').onkeydown = event => event.key === 'Enter' && load();
+document.querySelectorAll('.categories button').forEach(button => button.onclick = () => { $('#category').value = button.dataset.cat; load(); $('#movies').scrollIntoView({ behavior: 'smooth' }); });
+['category', 'language', 'year'].forEach(key => $('#' + key).onchange = load);
+$('#clear').onclick = () => { ['category', 'language', 'year'].forEach(key => $('#' + key).value = ''); $('#search').value = ''; load(); };
+cards.onclick = event => { const card = event.target.closest('.card'); if (card) details(card.dataset.id); };
+$('.filter-toggle').onclick = () => { $('.filters').hidden = !$('.filters').hidden; }; $('.close').onclick = () => dialog.close(); $('.menu').onclick = () => document.querySelector('nav').classList.toggle('open');
